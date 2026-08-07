@@ -17,6 +17,7 @@
 !testdata/**
 !.github/
 !.github/**
+!benchmark/bench.sh
 
 # Still deny build artifacts / junk inside allowed trees
 src/**/*.o

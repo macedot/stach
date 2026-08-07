@@ -117,6 +117,14 @@ make test
 
 Covers file copy, nested tree, symlink, hardlink, and `bkp -x`.
 
+## Benchmark
+
+```bash
+benchmark/bench.sh   # WORKERS=N RUNS=N to override defaults
+```
+
+Compares archive formats (zstd, lz4, gzip, xz, brotli, store) against bkp's embedded zstd: pack/extract times and ratio on a generated mixed corpus, with a `decompress | tar -x` round-trip gate per candidate. Writes `benchmark/RESULTS.md` (not tracked). Requires `zstd`, `lz4`, `xz`, `brotli`, `python3`.
+
 ## Releases
 
 Publishing a GitHub Release runs [`.github/workflows/release.yml`](.github/workflows/release.yml) and attaches:
