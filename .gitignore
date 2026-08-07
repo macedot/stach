@@ -18,6 +18,8 @@
 !.github/
 !.github/**
 !benchmark/bench.sh
+!benchmark/RESULTS.md
+!benchmark/results.csv
 
 # Still deny build artifacts / junk inside allowed trees
 src/**/*.o
