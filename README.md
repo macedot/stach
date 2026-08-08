@@ -19,6 +19,7 @@ Written in [Odin](https://odin-lang.org/). Compression uses embedded [zstd](http
 
 - **Timestamped file copies** — `notes.txt` → `notes.txt.20260714120000` (like `cp -p`)
 - **Directory archives** — `project/` → `project.20260714120000.tar.zst`
+- **List mode** — no paths → pack `<dirname>.list` entries into one `<dirname>.<timestamp>.tar.zst` (`-f` for a custom list)
 - **Symlinks & hardlinks** — stored correctly in the tar stream
 - **Extract mode** — `stach -x` restores files, dirs, and links safely
 - **Parallel entities** — `-j` processes multiple top-level paths at once
@@ -53,6 +54,7 @@ make
 
 ```
 stach [--quiet] [-j N] [-c N] <file|directory|pattern> ...
+stach [--quiet] [-c N] [-f list_file]
 stach [-c N] -x <archive.tar.zst> [dest_dir]
 ```
 
@@ -60,15 +62,18 @@ stach [-c N] -x <archive.tar.zst> [dest_dir]
 |------|----------|
 | **File** | Copy to `<path>.<timestamp>` |
 | **Directory** | Pack to `<path>.<timestamp>.tar.zst` (ustar + zstd level 1) |
+| **List** | No paths → if `<cwd-basename>.list` exists, pack all its entries into one `<cwd-basename>.<timestamp>.tar.zst` |
+| **`-f FILE`** | Same as list mode using a custom list file |
 | **`-x`** | Unpack `.tar.zst` into `dest_dir` (default: `.`) |
 
 | Flag | Default | Description |
 |------|---------|-------------|
 | `-j N` | CPU count | Max paths to process in parallel |
 | `-c N` | CPU count | multi-frame zstd workers (pack + extract decompress) and extract file writers |
+| `-f FILE` | `<cwd-basename>.list` when present | List file: one path per line; `#` comments; wildcards; missing entries warn and skip |
 | `--quiet` | off | Suppress all non-error output (progress + `src -> dst`) |
 
-No arguments prints usage and exits with code `2`. Exit `1` if any path fails.
+No arguments and no default list file prints usage and exits with code `2`. Exit `1` if any path fails.
 
 In default mode, stdout shows live single-line folder packing progress plus mapping lines:
 
@@ -90,6 +95,14 @@ Use `--quiet` to keep stdout empty unless an error occurs (errors still go to st
 # Shell globs (or let stach expand patterns)
 ./stach 'logs/*.log'
 
+# List mode: pack every entry of <dirname>.list into one archive
+# Example project.list:
+#   .config
+#   .ssh
+#   Documents/*.pdf
+./stach
+./stach -f backup.list
+
 # Extract (parallel file writes via -c)
 ./stach -c 8 -x project.20260714120000.tar.zst restored/
 
@@ -104,8 +117,9 @@ zstd -d -c project.20260714120000.tar.zst | tar -xf - -C restored/
 |-------|--------|
 | Regular file | Byte copy next to the source, suffix `.<YYYYMMDDHHMMSS>` |
 | Directory | Walk with `lstat` → ustar members (`0` file, `5` dir, `2` symlink, `1` hardlink) → multi-frame zstd → `.tar.zst` |
+| List file | Resolve lines (comments/globs/missing skips) → multi-root walk into **one** `.tar.zst` named after the current directory |
 
-Hardlinks share an inode: the first copy stores data; later names reference it. Symlinks store the link target, not the pointed-to content.
+Hardlinks share an inode: the first copy stores data; later names reference it. Symlinks store the link target, not the pointed-to content. In list mode, hardlink dedup is shared across all list roots.
 
 Packing splits the tar into independent zstd frames (when `-c` > 1 and the tree is large enough) so both compress and decompress scale across cores. Extract inflates frames in parallel, creates directories, writes regular files in parallel, then applies symlinks/hardlinks. Path traversal (`..`, absolute names) is rejected before writing under the destination.
 
@@ -115,7 +129,7 @@ Packing splits the tar into independent zstd frames (when `-c` > 1 and the tree 
 make test
 ```
 
-Covers file copy, nested tree, symlink, hardlink, and `stach -x`.
+Covers file copy, nested tree, symlink, hardlink, `stach -x`, and list mode (`*.list` / `-f`).
 
 ## Benchmark
 
@@ -140,7 +154,7 @@ Publishing a GitHub Release runs [`.github/workflows/release.yml`](.github/workf
 
 | Path | Role |
 |------|------|
-| `src/` | Odin sources (CLI, tar write/read, copy) |
+| `src/` | Odin sources (CLI, list mode, tar write/read, copy) |
 | `vendor/zstd/` | Embedded [zstd](https://github.com/facebook/zstd) library |
 | `vendor/stach_zstd_wrap.c` | Thin C API used from Odin |
 | `build/` | Local objects / static lib (not tracked) |

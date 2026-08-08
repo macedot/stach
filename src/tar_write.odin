@@ -51,13 +51,6 @@ PROGRESS_ENTRY_STEP :: 32
 // tar_directory writes src tree to dst as zstd-compressed ustar (.tar.zst).
 // compress_workers: multi-frame parallel compress (independent zstd frames).
 tar_directory :: proc(src_path, dst_path: string, compress_workers: int) -> bool {
-	workers := max(1, compress_workers)
-
-	if os.exists(dst_path) {
-		eprintfln("Error: Destination exists: %s", dst_path)
-		return false
-	}
-
 	src := strip_trailing_slashes(src_path)
 	base_name := filepath.base(src)
 	if base_name == "" || base_name == "." || base_name == ".." {
@@ -71,7 +64,25 @@ tar_directory :: proc(src_path, dst_path: string, compress_workers: int) -> bool
 	}
 	defer destroy_tar_entries(entries)
 
-	progress := new_tar_pack_progress(base_name, entries)
+	return pack_tar_entries(base_name, entries, dst_path, compress_workers)
+}
+
+// pack_tar_entries renders progress, builds the ustar buffer, compresses it with
+// multi-frame zstd, and writes dst_path. Shared by tar_directory and list mode.
+pack_tar_entries :: proc(
+	label: string,
+	entries: [dynamic]Tar_Entry,
+	dst_path: string,
+	compress_workers: int,
+) -> bool {
+	workers := max(1, compress_workers)
+
+	if os.exists(dst_path) {
+		eprintfln("Error: Destination exists: %s", dst_path)
+		return false
+	}
+
+	progress := new_tar_pack_progress(label, entries)
 	render_pack_progress(&progress, true)
 
 	tar_buf := make([dynamic]u8)
@@ -90,19 +101,19 @@ tar_directory :: proc(src_path, dst_path: string, compress_workers: int) -> bool
 	append_zeros(&tar_buf, 1024)
 
 	print_progress_update(
-		progress_phase_line(base_name, fmt.tprintf("Compressing zstd (%d workers)", workers)),
+		progress_phase_line(label, fmt.tprintf("Compressing zstd (%d workers)", workers)),
 		false,
 	)
 
 	comp, cok := zstd_compress_tar_parallel(tar_buf[:], workers)
 	if !cok {
 		finish_pack_progress(&progress, false)
-		eprintfln("Error: zstd compress failed for %s", src)
+		eprintfln("Error: zstd compress failed for %s", label)
 		return false
 	}
 	defer delete(comp)
 
-	print_progress_update(progress_phase_line(base_name, "Writing archive"), false)
+	print_progress_update(progress_phase_line(label, "Writing archive"), false)
 	if err := os.write_entire_file(dst_path, comp); err != nil {
 		finish_pack_progress(&progress, false)
 		_ = os.remove(dst_path)
@@ -312,16 +323,6 @@ human_payload :: proc(n: i64) -> string {
 
 collect_tar_entries :: proc(src, base_name: string) -> [dynamic]Tar_Entry {
 	entries := make([dynamic]Tar_Entry)
-
-	src_abs, abs_err := os.get_absolute_path(src, context.allocator)
-	if abs_err != nil {
-		eprintfln("Error: resolve path %s: %v", src, abs_err)
-		return nil
-	}
-	defer delete(src_abs)
-	src_root := strip_trailing_slashes(src_abs)
-
-	// inode -> first archive path for hardlinks
 	seen_inos := make(map[u128]string)
 	defer {
 		for _, v in seen_inos {
@@ -329,22 +330,44 @@ collect_tar_entries :: proc(src, base_name: string) -> [dynamic]Tar_Entry {
 		}
 		delete(seen_inos)
 	}
+	if !collect_tree_entries(src, base_name, &entries, &seen_inos) {
+		destroy_tar_entries(entries)
+		return nil
+	}
+	return entries
+}
+
+// collect_tree_entries walks directory src with lstat, appending entries named
+// under root_name. seen_inos is shared so hardlinks dedup across multiple roots
+// (list mode). On error the caller cleans up entries.
+collect_tree_entries :: proc(
+	src, root_name: string,
+	entries: ^[dynamic]Tar_Entry,
+	seen_inos: ^map[u128]string,
+) -> bool {
+	src_abs, abs_err := os.get_absolute_path(src, context.allocator)
+	if abs_err != nil {
+		eprintfln("Error: resolve path %s: %v", src, abs_err)
+		return false
+	}
+	defer delete(src_abs)
+	src_root := strip_trailing_slashes(src_abs)
 
 	// Root directory entry.
 	{
 		info, err := os.lstat(src, context.allocator)
 		if err != nil {
 			eprintfln("Error: lstat %s: %v", src, err)
-			return nil
+			return false
 		}
 		defer os.file_info_delete(info, context.allocator)
-		root_name := archive_entry_name(src_root, src_root, base_name, true)
+		root_entry_name := archive_entry_name(src_root, src_root, root_name, true)
 		append(
-			&entries,
+			entries,
 			Tar_Entry {
 				kind       = .Dir,
 				fullpath   = strings.clone(src),
-				entry_name = root_name,
+				entry_name = root_entry_name,
 				mode       = mode_from_info(info),
 				mtime      = time.to_unix_seconds(info.modification_time),
 			},
@@ -357,8 +380,7 @@ collect_tar_entries :: proc(src, base_name: string) -> [dynamic]Tar_Entry {
 	for info in os.walker_walk(&w) {
 		if path, err := os.walker_error(&w); err != nil {
 			eprintfln("Error: walking %s: %v", path, err)
-			destroy_tar_entries(entries)
-			return nil
+			return false
 		}
 
 		fp := strip_trailing_slashes(info.fullpath)
@@ -370,16 +392,15 @@ collect_tar_entries :: proc(src, base_name: string) -> [dynamic]Tar_Entry {
 		li, lerr := os.lstat(info.fullpath, context.allocator)
 		if lerr != nil {
 			eprintfln("Error: lstat %s: %v", info.fullpath, lerr)
-			destroy_tar_entries(entries)
-			return nil
+			return false
 		}
 		defer os.file_info_delete(li, context.allocator)
 
 		switch li.type {
 		case .Directory:
-			name := archive_entry_name(src_root, fp, base_name, true)
+			name := archive_entry_name(src_root, fp, root_name, true)
 			append(
-				&entries,
+				entries,
 				Tar_Entry {
 					kind       = .Dir,
 					fullpath   = strings.clone(info.fullpath),
@@ -392,12 +413,11 @@ collect_tar_entries :: proc(src, base_name: string) -> [dynamic]Tar_Entry {
 			target, rerr := os.read_link(info.fullpath, context.allocator)
 			if rerr != nil {
 				eprintfln("Error: readlink %s: %v", info.fullpath, rerr)
-				destroy_tar_entries(entries)
-				return nil
+				return false
 			}
-			name := archive_entry_name(src_root, fp, base_name, false)
+			name := archive_entry_name(src_root, fp, root_name, false)
 			append(
-				&entries,
+				entries,
 				Tar_Entry {
 					kind        = .Symlink,
 					fullpath    = strings.clone(info.fullpath),
@@ -408,12 +428,12 @@ collect_tar_entries :: proc(src, base_name: string) -> [dynamic]Tar_Entry {
 				},
 			)
 		case .Regular, .Undetermined:
-			name := archive_entry_name(src_root, fp, base_name, false)
+			name := archive_entry_name(src_root, fp, root_name, false)
 			// Hardlink if inode already stored as a regular file.
 			if li.inode != 0 {
-				if first, ok := seen_inos[li.inode]; ok {
+				if first, ok := seen_inos^[li.inode]; ok {
 					append(
-						&entries,
+						entries,
 						Tar_Entry {
 							kind        = .Hardlink,
 							fullpath    = strings.clone(info.fullpath),
@@ -429,14 +449,13 @@ collect_tar_entries :: proc(src, base_name: string) -> [dynamic]Tar_Entry {
 			data, rerr := os.read_entire_file(info.fullpath, context.allocator)
 			if rerr != nil {
 				eprintfln("Error: read %s: %v", info.fullpath, rerr)
-				destroy_tar_entries(entries)
-				return nil
+				return false
 			}
 			if li.inode != 0 {
-				seen_inos[li.inode] = strings.clone(name)
+				seen_inos^[li.inode] = strings.clone(name)
 			}
 			append(
-				&entries,
+				entries,
 				Tar_Entry {
 					kind       = .File,
 					fullpath   = strings.clone(info.fullpath),
@@ -454,10 +473,86 @@ collect_tar_entries :: proc(src, base_name: string) -> [dynamic]Tar_Entry {
 
 	if path, err := os.walker_error(&w); err != nil {
 		eprintfln("Error: walking %s: %v", path, err)
-		destroy_tar_entries(entries)
-		return nil
+		return false
 	}
-	return entries
+	return true
+}
+
+// append_single_entry adds one top-level regular file or symlink to entries
+// under an explicit archive name. Used by list mode for non-directory lines.
+// Special files are warned about and skipped (not an error).
+append_single_entry :: proc(
+	fullpath, entry_name: string,
+	entries: ^[dynamic]Tar_Entry,
+	seen_inos: ^map[u128]string,
+) -> bool {
+	li, lerr := os.lstat(fullpath, context.allocator)
+	if lerr != nil {
+		eprintfln("Error: lstat %s: %v", fullpath, lerr)
+		return false
+	}
+	defer os.file_info_delete(li, context.allocator)
+
+	#partial switch li.type {
+	case .Symlink:
+		target, rerr := os.read_link(fullpath, context.allocator)
+		if rerr != nil {
+			eprintfln("Error: readlink %s: %v", fullpath, rerr)
+			return false
+		}
+		append(
+			entries,
+			Tar_Entry {
+				kind        = .Symlink,
+				fullpath    = strings.clone(fullpath),
+				entry_name  = strings.clone(entry_name),
+				link_target = target,
+				mode        = 0o777,
+				mtime       = time.to_unix_seconds(li.modification_time),
+			},
+		)
+	case .Regular, .Undetermined:
+		// Hardlink if inode already stored as a regular file.
+		if li.inode != 0 {
+			if first, ok := seen_inos^[li.inode]; ok {
+				append(
+					entries,
+					Tar_Entry {
+						kind        = .Hardlink,
+						fullpath    = strings.clone(fullpath),
+						entry_name  = strings.clone(entry_name),
+						link_target = strings.clone(first),
+						mode        = mode_from_info(li),
+						mtime       = time.to_unix_seconds(li.modification_time),
+					},
+				)
+				return true
+			}
+		}
+		data, rerr := os.read_entire_file(fullpath, context.allocator)
+		if rerr != nil {
+			eprintfln("Error: read %s: %v", fullpath, rerr)
+			return false
+		}
+		if li.inode != 0 {
+			seen_inos^[li.inode] = strings.clone(entry_name)
+		}
+		append(
+			entries,
+			Tar_Entry {
+				kind       = .File,
+				fullpath   = strings.clone(fullpath),
+				entry_name = strings.clone(entry_name),
+				mode       = mode_from_info(li),
+				mtime      = time.to_unix_seconds(li.modification_time),
+				size       = i64(len(data)),
+				data       = data,
+			},
+		)
+	case:
+		eprintfln("Warning: skip (special file): %s", fullpath)
+	}
+	return true
 }
 
 destroy_tar_entries :: proc(entries: [dynamic]Tar_Entry) {

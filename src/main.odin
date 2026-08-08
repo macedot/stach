@@ -45,11 +45,17 @@ print_usage :: proc() {
 	}
 	fmt.eprintf(
 		`Usage: %s [--quiet] [-j N] [-c N] <file|directory|pattern> ...
+       %s [--quiet] [-c N] [-f list_file]
        %s [-c N] -x <archive.tar.zst> [dest_dir]
 
   Backup (default):
     Files  → copy to <path>.<timestamp>
     Dirs   → <path>.<timestamp>.tar.zst  (ustar + zstd level 1; symlinks/hardlinks)
+
+  List mode:
+    No paths → pack entries of <dirname>.list into one <dirname>.<timestamp>.tar.zst
+    -f FILE  Use a custom list file (one path per line; '#' comments and
+             wildcards supported; missing entries warn and are skipped)
 
   Extract:
     -x     Unpack .tar.zst into dest_dir (default: .)
@@ -61,6 +67,7 @@ print_usage :: proc() {
   Prints only: src -> dst and live pack progress
   Errors go to stderr.
 `,
+		prog,
 		prog,
 		prog,
 	)
@@ -151,6 +158,7 @@ main :: proc() {
 	extract_mode := false
 	extract_archive: string
 	extract_dest := "."
+	list_file := ""
 
 	patterns := make([dynamic]string)
 	defer delete(patterns)
@@ -223,6 +231,21 @@ main :: proc() {
 			i += 1
 			continue
 		}
+		if a == "-f" || a == "--file" {
+			if i + 1 >= len(args) {
+				eprintfln("Error: %s requires a list file path", a)
+				print_usage()
+				os.exit(2)
+			}
+			list_file = args[i + 1]
+			i += 2
+			continue
+		}
+		if strings.has_prefix(a, "-f") && len(a) > 2 {
+			list_file = a[2:]
+			i += 1
+			continue
+		}
 		if strings.has_prefix(a, "-") {
 			eprintfln("Error: unknown option: %s", a)
 			print_usage()
@@ -233,6 +256,11 @@ main :: proc() {
 	}
 
 	if extract_mode {
+		if list_file != "" {
+			eprintfln("Error: -f cannot be combined with -x")
+			print_usage()
+			os.exit(2)
+		}
 		if len(patterns) < 1 || len(patterns) > 2 {
 			eprintfln("Error: -x requires <archive.tar.zst> [dest_dir]")
 			print_usage()
@@ -244,6 +272,27 @@ main :: proc() {
 		}
 		if extract_tar_zst(extract_archive, extract_dest, cores_n) {
 			print_src_dst(extract_archive, extract_dest)
+			os.exit(0)
+		}
+		os.exit(1)
+	}
+
+	// List mode: explicit -f, or no paths and a default <cwd-basename>.list.
+	list_path := list_file
+	if list_path == "" && len(patterns) == 0 {
+		list_path = default_list_file()
+	}
+	if list_path != "" {
+		if len(patterns) > 0 {
+			eprintfln("Error: -f / list mode cannot be combined with path arguments")
+			print_usage()
+			os.exit(2)
+		}
+		if !os.exists(list_path) {
+			eprintfln("Error: list file not found: %s", list_path)
+			os.exit(1)
+		}
+		if run_list_mode(list_path, cores_n) {
 			os.exit(0)
 		}
 		os.exit(1)

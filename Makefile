@@ -98,5 +98,42 @@ test: $(OUT)
 	diff -q "$$TMP/big/a.bin" "$$TMP/outb/big/a.bin"; \
 	diff -q "$$TMP/big/b.bin" "$$TMP/outb/big/b.bin"; \
 	test "$$(readlink "$$TMP/outb/big/sub/link.txt")" = "c.txt"; \
+	LISTTMP=$$(mktemp -d); \
+	BASE=$$(basename "$$LISTTMP"); \
+	mkdir -p "$$LISTTMP/cfg" "$$LISTTMP/docs"; \
+	echo keep > "$$LISTTMP/cfg/a.txt"; \
+	echo one > "$$LISTTMP/docs/one.pdf"; \
+	echo two > "$$LISTTMP/docs/two.pdf"; \
+	echo root > "$$LISTTMP/root.txt"; \
+	printf '%s\n' \
+		'# comment' \
+		'cfg' \
+		'root.txt' \
+		'docs/*.pdf' \
+		'missing-file-xyz' \
+		> "$$LISTTMP/$$BASE.list"; \
+	LOUT=$$(cd "$$LISTTMP" && "$(CURDIR)/$(OUT)" -c 2 2>"$$LISTTMP/errl"); \
+	echo "$$LOUT"; \
+	test -z "$$(grep -v 'skip (not found)' "$$LISTTMP/errl" || true)" || (echo "STDERR (list default):" && cat "$$LISTTMP/errl" && exit 1); \
+	grep -q 'skip (not found)' "$$LISTTMP/errl"; \
+	echo "$$LOUT" | grep -q "$$BASE -> $$BASE."; \
+	LTZST=$$(ls "$$LISTTMP"/$$BASE.*.tar.zst); \
+	test -f "$$LTZST"; \
+	test $$(ls "$$LISTTMP"/*.tar.zst | wc -l | tr -d ' ') -eq 1; \
+	mkdir -p "$$LISTTMP/outl"; \
+	LX=$$(cd "$$LISTTMP" && "$(CURDIR)/$(OUT)" -c 2 -x "$$(basename "$$LTZST")" outl 2>"$$LISTTMP/errlx"); \
+	echo "$$LX"; \
+	test -z "$$(cat "$$LISTTMP/errlx")" || (echo "STDERR (list extract):" && cat "$$LISTTMP/errlx" && exit 1); \
+	diff -u "$$LISTTMP/cfg/a.txt" "$$LISTTMP/outl/cfg/a.txt"; \
+	diff -u "$$LISTTMP/root.txt" "$$LISTTMP/outl/root.txt"; \
+	diff -u "$$LISTTMP/docs/one.pdf" "$$LISTTMP/outl/docs/one.pdf"; \
+	diff -u "$$LISTTMP/docs/two.pdf" "$$LISTTMP/outl/docs/two.pdf"; \
+	rm -f "$$LTZST"; \
+	printf '%s\n' 'root.txt' 'cfg' > "$$LISTTMP/custom.list"; \
+	QLOUT=$$(cd "$$LISTTMP" && "$(CURDIR)/$(OUT)" --quiet -f custom.list 2>"$$LISTTMP/errql"); \
+	test -z "$$QLOUT" || (echo "Expected empty stdout with --quiet list mode" && echo "$$QLOUT" && exit 1); \
+	test -z "$$(cat "$$LISTTMP/errql")" || (echo "STDERR (--quiet list):" && cat "$$LISTTMP/errql" && exit 1); \
+	test $$(ls "$$LISTTMP"/$$BASE.*.tar.zst | wc -l | tr -d ' ') -eq 1; \
+	rm -rf "$$LISTTMP"; \
 	echo "OK"; \
 	rm -rf "$$TMP"
