@@ -39,7 +39,7 @@ print_progress_update :: proc(line: string, done := false) {
 }
 
 print_usage :: proc() {
-	prog := "bkp"
+	prog := "stach"
 	if len(os.args) > 0 {
 		prog = os.args[0]
 	}

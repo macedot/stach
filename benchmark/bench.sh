@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# bkp compression benchmark — compares archive formats for bkp's directory-backup
+# stach compression benchmark — compares archive formats for stach's directory-backup
 # use case. Every candidate must round-trip through system tar (decompress | tar -x)
 # with a byte-identical tree. Results: benchmark/results.csv + benchmark/RESULTS.md.
 #
 # Usage: benchmark/bench.sh
-#   WORKERS=N  parallel workers (default: CPU count, mirrors bkp -c)
+#   WORKERS=N  parallel workers (default: CPU count, mirrors stach -c)
 #   RUNS=N     timing repetitions, best-of (default: 3)
 set -euo pipefail
 
@@ -12,7 +12,7 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 OUT_DIR="$REPO_ROOT/benchmark"
 CSV="$OUT_DIR/results.csv"
 REPORT="$OUT_DIR/RESULTS.md"
-BKP="$REPO_ROOT/bkp"
+STACH="$REPO_ROOT/stach"
 
 WORKERS="${WORKERS:-$(sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)}"
 RUNS="${RUNS:-3}"
@@ -118,14 +118,14 @@ XOUT="$TMP/.xout"
 pack_store()    { tar -cf "$ARCH" -C "$TMP" corpus; }
 extract_store() { rm -rf "$XOUT"; mkdir -p "$XOUT"; tar -xf "$ARCH" -C "$XOUT"; }
 
-pack_bkp() {
+pack_stach() {
 	rm -f "$TMP"/corpus.*.tar.zst
-	(cd "$TMP" && "$BKP" --quiet -c "$WORKERS" corpus)
+	(cd "$TMP" && "$STACH" --quiet -c "$WORKERS" corpus)
 }
-extract_bkp() {
+extract_stach() {
 	rm -rf "$XOUT"
 	mkdir -p "$XOUT"
-	"$BKP" --quiet -c "$WORKERS" -x "$ARCH" "$XOUT"
+	"$STACH" --quiet -c "$WORKERS" -x "$ARCH" "$XOUT"
 }
 
 pack_zstd() { tar -cf - -C "$TMP" corpus | zstd -q "$ZSTD_LVL" -T"$WORKERS" -c > "$ARCH"; }
@@ -136,7 +136,7 @@ extract_zstd() {
 }
 
 # lz4 CLI has no multithreading: split the tar into WORKERS*4 chunks, compress
-# in parallel, concatenate frames (same model as bkp's multi-frame zstd).
+# in parallel, concatenate frames (same model as stach's multi-frame zstd).
 pack_lz4() {
 	local cdir="$TMP/.lz4c" ttar="$TMP/.lz4.tar" size chunk
 	rm -rf "$cdir"
@@ -167,7 +167,7 @@ extract_xz() { rm -rf "$XOUT"; mkdir -p "$XOUT"; xz -dc "$ARCH" | tar -x -C "$XO
 pack_brotli()    { tar -cf - -C "$TMP" corpus | brotli -q 1 -c > "$ARCH"; }
 extract_brotli() { rm -rf "$XOUT"; mkdir -p "$XOUT"; brotli -dc "$ARCH" | tar -x -C "$XOUT"; }
 
-# run_candidate NAME PARALLEL_INFO PACK_FN EXTRACT_FN ARCH_PATH DECCMD DEC_FOR_BKP
+# run_candidate NAME PARALLEL_INFO PACK_FN EXTRACT_FN ARCH_PATH DECCMD DEC_FOR_STACH
 run_candidate() {
 	local name="$1" par="$2" pack_fn="$3" extract_fn="$4" arch="$5" dec="$6"
 	ARCH="$arch"
@@ -191,32 +191,32 @@ run_candidate() {
 }
 
 # ------------------------------------------------------------------ run ----
-echo "== Building bkp"
+echo "== Building stach"
 make -C "$REPO_ROOT" > /dev/null
 
 echo "candidate,parallel,pack_ms,extract_ms,size_bytes" > "$CSV"
 
 run_candidate "store (tar only)" "none" pack_store extract_store "$TMP/arch_store.tar" "cat"
 
-ARCH_BKP="$TMP/bkp_archive.tar.zst"
-pack_bkp
-mv "$TMP"/corpus.*.tar.zst "$ARCH_BKP"
-# bkp archives must also be extractable via system zstd | tar
-echo "== bkp zstd-1 multi-frame (embedded)"
+ARCH_STACH="$TMP/stach_archive.tar.zst"
+pack_stach
+mv "$TMP"/corpus.*.tar.zst "$ARCH_STACH"
+# stach archives must also be extractable via system zstd | tar
+echo "== stach zstd-1 multi-frame (embedded)"
 echo "   gate: zstd -dc | tar -x"
-gate_pipe "zstd -q -dc" "$ARCH_BKP"
-echo "   gate: bkp -x"
+gate_pipe "zstd -q -dc" "$ARCH_STACH"
+echo "   gate: stach -x"
 G="$TMP/.gate"
 rm -rf "$G"; mkdir -p "$G"
-"$BKP" --quiet -c "$WORKERS" -x "$ARCH_BKP" "$G"
+"$STACH" --quiet -c "$WORKERS" -x "$ARCH_STACH" "$G"
 verify_tree "$G"
 rm -rf "$G"
-BKP_PACK_MS=$(time_best pack_bkp)
-BKP_SIZE=$(stat -f %z "$ARCH_BKP")
-ARCH="$ARCH_BKP"
-BKP_EXTRACT_MS=$(time_best extract_bkp)
-printf '%s,%s,%s,%s,%s\n' "bkp zstd-1 (embedded)" "multi-frame -c $WORKERS" \
-	"$BKP_PACK_MS" "$BKP_EXTRACT_MS" "$BKP_SIZE" >> "$CSV"
+STACH_PACK_MS=$(time_best pack_stach)
+STACH_SIZE=$(stat -f %z "$ARCH_STACH")
+ARCH="$ARCH_STACH"
+STACH_EXTRACT_MS=$(time_best extract_stach)
+printf '%s,%s,%s,%s,%s\n' "stach zstd-1 (embedded)" "multi-frame -c $WORKERS" \
+	"$STACH_PACK_MS" "$STACH_EXTRACT_MS" "$STACH_SIZE" >> "$CSV"
 
 ZSTD_LVL="--fast=1" run_candidate "zstd --fast=1" "-T $WORKERS" pack_zstd extract_zstd "$TMP/arch_zfast1.tar.zst" "zstd -q -dc"
 ZSTD_LVL="-1" run_candidate "zstd -1" "-T $WORKERS" pack_zstd extract_zstd "$TMP/arch_z1.tar.zst" "zstd -q -dc"
@@ -243,13 +243,13 @@ best_extract=$(tail -n +2 "$CSV" | sort -t, -k4 -n | head -1 | cut -d, -f1)
 best_ratio=$(tail -n +2 "$CSV" | grep -v '^store' | sort -t, -k5 -n | head -1 | cut -d, -f1)
 
 {
-	echo "# bkp compression benchmark"
+	echo "# stach compression benchmark"
 	echo
 	echo "- Date: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 	echo "- Machine: $(uname -srm); $(sysctl -n machdep.cpu.brand_string 2>/dev/null || echo unknown CPU)"
-	echo "- Workers: $WORKERS (mirrors bkp \`-c\`); best of $RUNS runs"
+	echo "- Workers: $WORKERS (mirrors stach \`-c\`); best of $RUNS runs"
 	echo "- Corpus: $((ORIG_BYTES / 1048576)) MiB tar (256 MiB logs, 128 MiB random, 64 MiB zeros, ~64 MiB small files, symlinks + hardlink)"
-	echo "- Correctness: every archive round-trips via \`<decompressor> | tar -x\` with a byte-identical tree; bkp archives also verified via \`bkp -x\`"
+	echo "- Correctness: every archive round-trips via \`<decompressor> | tar -x\` with a byte-identical tree; stach archives also verified via \`stach -x\`"
 	echo
 	echo "| Candidate | Parallel | Pack (s) | Extract (s) | Size (MiB) | Ratio | Pack MiB/s |"
 	echo "|---|---|---:|---:|---:|---:|---:|"
@@ -263,8 +263,8 @@ best_ratio=$(tail -n +2 "$CSV" | grep -v '^store' | sort -t, -k5 -n | head -1 | 
 	echo
 	echo "## Notes"
 	echo
-	echo "- \`bkp zstd-1 (embedded)\` includes in-memory tar building; pipeline candidates stream \`tar -cf - | compressor\`."
-	echo "- lz4 CLI has no multithreading; it is chunked into $((WORKERS * 4)) parts compressed with \`xargs -P $WORKERS\` and concatenated (same model as bkp multi-frame zstd). \`lz4 --fast=3\` is shown instead of \`--fast=1\`, which is identical to the default."
+	echo "- \`stach zstd-1 (embedded)\` includes in-memory tar building; pipeline candidates stream \`tar -cf - | compressor\`."
+	echo "- lz4 CLI has no multithreading; it is chunked into $((WORKERS * 4)) parts compressed with \`xargs -P $WORKERS\` and concatenated (same model as stach multi-frame zstd). \`lz4 --fast=3\` is shown instead of \`--fast=1\`, which is identical to the default."
 	echo "- gzip and brotli ran single-threaded (no pigz installed)."
 	echo "- Ratio is archive size / uncompressed tar size; lower is better."
 } > "$REPORT"

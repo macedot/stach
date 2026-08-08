@@ -1,17 +1,17 @@
-<h1 align="center">bkp</h1>
+<h1 align="center">stach</h1>
 
 <p align="center"><strong>Standalone timestamped backups — files, folders, symlinks, hardlinks</strong></p>
 
 <p align="center">
-  <img src="https://img.shields.io/github/license/macedot/bkp?color=blue" alt="License" />
+  <img src="https://img.shields.io/github/license/macedot/stach?color=blue" alt="License" />
   <img src="https://img.shields.io/badge/Odin-dev--2026-blueviolet" alt="Odin" />
   <img src="https://img.shields.io/badge/platform-linux%20%7C%20macOS%20%7C%20windows-lightgrey" alt="Platforms" />
-  <img src="https://img.shields.io/github/v/release/macedot/bkp?display_name=tag" alt="Release" />
+  <img src="https://img.shields.io/github/v/release/macedot/stach?display_name=tag" alt="Release" />
 </p>
 
 ---
 
-**bkp** is a small, dependency-free CLI for fast local backups. Point it at files or directories and get timestamped copies: plain files are duplicated beside the original; directories become a single **`.tar.zst`** (ustar + zstd) that preserves **symlinks** and **hardlinks**. Unpack with `bkp -x` or `tar` + `zstd` when those tools are available.
+**stach** is a small, dependency-free CLI for fast local backups. Point it at files or directories and get timestamped copies: plain files are duplicated beside the original; directories become a single **`.tar.zst`** (ustar + zstd) that preserves **symlinks** and **hardlinks**. Unpack with `stach -x` or `tar` + `zstd` when those tools are available.
 
 Written in [Odin](https://odin-lang.org/). Compression uses embedded [zstd](https://github.com/facebook/zstd) (level 1, multi-threaded). No system `zstd` required at runtime.
 
@@ -20,7 +20,7 @@ Written in [Odin](https://odin-lang.org/). Compression uses embedded [zstd](http
 - **Timestamped file copies** — `notes.txt` → `notes.txt.20260714120000` (like `cp -p`)
 - **Directory archives** — `project/` → `project.20260714120000.tar.zst`
 - **Symlinks & hardlinks** — stored correctly in the tar stream
-- **Extract mode** — `bkp -x` restores files, dirs, and links safely
+- **Extract mode** — `stach -x` restores files, dirs, and links safely
 - **Parallel entities** — `-j` processes multiple top-level paths at once
 - **Parallel compress & extract** — `-c` multi-frame zstd (parallel compress + decompress) and parallel file writers
 - **Folder pack progress** — live single-line progress while building archives
@@ -31,11 +31,11 @@ Written in [Odin](https://odin-lang.org/). Compression uses embedded [zstd](http
 
 ### Pre-built binary
 
-Download from [Releases](https://github.com/macedot/bkp/releases/latest), then:
+Download from [Releases](https://github.com/macedot/stach/releases/latest), then:
 
 ```bash
-chmod +x bkp-linux-amd64   # or the asset for your OS
-./bkp-linux-amd64 notes.txt src/
+chmod +x stach-linux-amd64   # or the asset for your OS
+./stach-linux-amd64 notes.txt src/
 ```
 
 ### Build from source
@@ -43,17 +43,17 @@ chmod +x bkp-linux-amd64   # or the asset for your OS
 Requires [Odin](https://odin-lang.org/docs/install/) and a C compiler (`cc` / MSVC on Windows).
 
 ```bash
-git clone https://github.com/macedot/bkp.git
-cd bkp
+git clone https://github.com/macedot/stach.git
+cd stach
 make
-./bkp
+./stach
 ```
 
 ## Usage
 
 ```
-bkp [--quiet] [-j N] [-c N] <file|directory|pattern> ...
-bkp [-c N] -x <archive.tar.zst> [dest_dir]
+stach [--quiet] [-j N] [-c N] <file|directory|pattern> ...
+stach [-c N] -x <archive.tar.zst> [dest_dir]
 ```
 
 | Mode | Behavior |
@@ -82,16 +82,16 @@ Use `--quiet` to keep stdout empty unless an error occurs (errors still go to st
 
 ```bash
 # Backup a file and a tree
-./bkp notes.txt src/
+./stach notes.txt src/
 
 # Parallel jobs + zstd workers
-./bkp -j 4 -c 8 data/*.csv project/
+./stach -j 4 -c 8 data/*.csv project/
 
-# Shell globs (or let bkp expand patterns)
-./bkp 'logs/*.log'
+# Shell globs (or let stach expand patterns)
+./stach 'logs/*.log'
 
 # Extract (parallel file writes via -c)
-./bkp -c 8 -x project.20260714120000.tar.zst restored/
+./stach -c 8 -x project.20260714120000.tar.zst restored/
 
 # Compatible with system tar + zstd when installed
 zstd -d -c project.20260714120000.tar.zst | tar -tf -
@@ -115,7 +115,7 @@ Packing splits the tar into independent zstd frames (when `-c` > 1 and the tree 
 make test
 ```
 
-Covers file copy, nested tree, symlink, hardlink, and `bkp -x`.
+Covers file copy, nested tree, symlink, hardlink, and `stach -x`.
 
 ## Benchmark
 
@@ -123,7 +123,7 @@ Covers file copy, nested tree, symlink, hardlink, and `bkp -x`.
 benchmark/bench.sh   # WORKERS=N RUNS=N to override defaults
 ```
 
-Compares archive formats (zstd, lz4, gzip, xz, brotli, store) against bkp's embedded zstd: pack/extract times and ratio on a generated mixed corpus, with a `decompress | tar -x` round-trip gate per candidate. Latest numbers in [`benchmark/RESULTS.md`](benchmark/RESULTS.md). Requires `zstd`, `lz4`, `xz`, `brotli`, `python3`.
+Compares archive formats (zstd, lz4, gzip, xz, brotli, store) against stach's embedded zstd: pack/extract times and ratio on a generated mixed corpus, with a `decompress | tar -x` round-trip gate per candidate. Latest numbers in [`benchmark/RESULTS.md`](benchmark/RESULTS.md). Requires `zstd`, `lz4`, `xz`, `brotli`, `python3`.
 
 ## Releases
 
@@ -131,10 +131,10 @@ Publishing a GitHub Release runs [`.github/workflows/release.yml`](.github/workf
 
 | Asset | Platform |
 |-------|----------|
-| `bkp-linux-amd64.tar.gz` | Linux x86_64 |
-| `bkp-linux-arm64.tar.gz` | Linux ARM64 |
-| `bkp-darwin-arm64.tar.gz` | macOS Apple Silicon |
-| `bkp-windows-amd64.zip` | Windows x86_64 |
+| `stach-linux-amd64.tar.gz` | Linux x86_64 |
+| `stach-linux-arm64.tar.gz` | Linux ARM64 |
+| `stach-darwin-arm64.tar.gz` | macOS Apple Silicon |
+| `stach-windows-amd64.zip` | Windows x86_64 |
 
 ## Layout
 
@@ -142,12 +142,12 @@ Publishing a GitHub Release runs [`.github/workflows/release.yml`](.github/workf
 |------|------|
 | `src/` | Odin sources (CLI, tar write/read, copy) |
 | `vendor/zstd/` | Embedded [zstd](https://github.com/facebook/zstd) library |
-| `vendor/bkp_zstd_wrap.c` | Thin C API used from Odin |
+| `vendor/stach_zstd_wrap.c` | Thin C API used from Odin |
 | `build/` | Local objects / static lib (not tracked) |
 | `.github/workflows/` | Multi-arch release builds |
 
 ## License
 
-**bkp** is licensed under the [GNU Affero General Public License v3.0](LICENSE) (AGPL-3.0).
+**stach** is licensed under the [GNU Affero General Public License v3.0](LICENSE) (AGPL-3.0).
 
 Bundled [zstd](https://github.com/facebook/zstd) retains its own licenses (see `vendor/zstd/LICENSE` and `vendor/zstd/COPYING`).

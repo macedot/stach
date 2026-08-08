@@ -1,12 +1,12 @@
-# bkp — standalone Odin backup tool
+# stach — standalone Odin backup tool
 CC      ?= cc
 CFLAGS  ?= -O2 -fPIC -Ivendor
 ODIN    ?= odin
 BUILD   := build
 ZSTD_LIB_DIR := vendor/zstd/lib
 ZSTD_A  := $(ZSTD_LIB_DIR)/libzstd.a
-LIB     := $(BUILD)/libbkpzstd.a
-OUT     ?= bkp
+LIB     := $(BUILD)/libstachzstd.a
+OUT     ?= stach
 
 # Linux needs pthread for zstd multi-threaded compress; macOS has it in libSystem.
 UNAME_S := $(shell uname -s 2>/dev/null || echo unknown)
@@ -27,22 +27,22 @@ $(BUILD):
 $(ZSTD_A):
 	$(MAKE) -C $(ZSTD_LIB_DIR) libzstd.a-mt
 
-$(BUILD)/bkp_zstd_wrap.o: vendor/bkp_zstd_wrap.c vendor/zstd/lib/zstd.h | $(BUILD)
-	$(CC) $(CFLAGS) -c -o $@ vendor/bkp_zstd_wrap.c
+$(BUILD)/stach_zstd_wrap.o: vendor/stach_zstd_wrap.c vendor/zstd/lib/zstd.h | $(BUILD)
+	$(CC) $(CFLAGS) -c -o $@ vendor/stach_zstd_wrap.c
 
 # Combine wrap + libzstd into one archive for Odin foreign import.
-$(LIB): $(BUILD)/bkp_zstd_wrap.o $(ZSTD_A) | $(BUILD)
+$(LIB): $(BUILD)/stach_zstd_wrap.o $(ZSTD_A) | $(BUILD)
 	rm -rf $(BUILD)/zstd_objs
 	mkdir -p $(BUILD)/zstd_objs
 	cd $(BUILD)/zstd_objs && ar x ../../$(ZSTD_A)
-	ar rcs $@ $(BUILD)/zstd_objs/*.o $(BUILD)/bkp_zstd_wrap.o
+	ar rcs $@ $(BUILD)/zstd_objs/*.o $(BUILD)/stach_zstd_wrap.o
 	rm -rf $(BUILD)/zstd_objs
 
 $(OUT): $(LIB) src/*.odin
 	$(ODIN) build src -out:$(OUT) -o:speed $(EXTRA_LINKER)
 
 clean:
-	rm -rf $(BUILD) bkp bkp.exe
+	rm -rf $(BUILD) stach stach.exe
 	$(MAKE) -C $(ZSTD_LIB_DIR) clean >/dev/null 2>&1 || true
 
 # Functional smoke: file copy, .tar.zst with symlink+hardlink, extract

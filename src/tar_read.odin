@@ -96,7 +96,7 @@ zstd_decompress_parallel :: proc(zst: []u8, workers: int) -> (tar: []u8, ok: boo
 			src := zst[f.comp_off:f.comp_off + f.comp_len]
 			dst := tar[f.out_off:f.out_off + f.out_len]
 			out_len: c.size_t
-			if bkp_zstd_decompress_into(
+			if stach_zstd_decompress_into(
 				   raw_data(src),
 				   c.size_t(len(src)),
 				   raw_data(dst),
@@ -152,13 +152,13 @@ zstd_scan_frames :: proc(zst: []u8) -> (frames: [dynamic]Zstd_Frame, ok: bool) {
 	UNKNOWN :: ~c.size_t(0)
 	for off < len(zst) {
 		remain := zst[off:]
-		csize_c := bkp_zstd_frame_compressed_size(raw_data(remain), c.size_t(len(remain)))
+		csize_c := stach_zstd_frame_compressed_size(raw_data(remain), c.size_t(len(remain)))
 		csize := int(csize_c)
 		if csize_c == 0 || csize <= 0 || csize > len(remain) {
 			delete(frames)
 			return nil, false
 		}
-		usize_c := bkp_zstd_frame_content_size(raw_data(remain), c.size_t(csize))
+		usize_c := stach_zstd_frame_content_size(raw_data(remain), c.size_t(csize))
 		if usize_c == UNKNOWN {
 			delete(frames)
 			return nil, false
@@ -187,7 +187,7 @@ zstd_frame_decompress_task :: proc(t: thread.Task) {
 	src := job.zst[f.comp_off:f.comp_off + f.comp_len]
 	dst := job.tar[f.out_off:f.out_off + f.out_len]
 	out_len: c.size_t
-	if bkp_zstd_decompress_into(
+	if stach_zstd_decompress_into(
 		   raw_data(src),
 		   c.size_t(len(src)),
 		   raw_data(dst),

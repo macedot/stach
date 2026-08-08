@@ -1,11 +1,11 @@
 candidate,parallel,pack_ms,extract_ms,size_bytes
-store (tar only),none,499,630,589995520
-bkp zstd-1 (embedded),multi-frame -c 16,275,143,154843738
-zstd --fast=1,-T 16,387,682,162084640
-zstd -1,-T 16,397,658,155277646
-zstd -3 (reference),-T 16,379,672,153796436
-lz4 --fast=3,chunked -P 16,1004,664,202930271
-lz4 -1,chunked -P 16,1052,670,202543373
-gzip -1,single-thread,3094,615,178638837
-xz -1 (reference),-T 16,3486,639,150201568
-brotli -q 1 (reference),single-thread,842,1101,168120796
+store (tar only),none,788,803,589995520
+stach zstd-1 (embedded),multi-frame -c 16,447,182,154843797
+zstd --fast=1,-T 16,470,839,162074735
+zstd -1,-T 16,495,805,155274253
+zstd -3 (reference),-T 16,459,788,153797114
+lz4 --fast=3,chunked -P 16,1511,809,202930063
+lz4 -1,chunked -P 16,1329,791,202544193
+gzip -1,single-thread,3989,758,178634944
+xz -1 (reference),-T 16,3382,797,150202116
+brotli -q 1 (reference),single-thread,1052,1314,168121649

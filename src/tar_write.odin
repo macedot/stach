@@ -126,14 +126,14 @@ zstd_compress_tar_parallel :: proc(tar: []u8, workers: int) -> (out: []u8, ok: b
 			src_ptr = raw_data(tar)
 		}
 		out_len: c.size_t
-		comp := bkp_zstd_compress(src_ptr, c.size_t(tar_len), 1, c.int(workers), &out_len)
+		comp := stach_zstd_compress(src_ptr, c.size_t(tar_len), 1, c.int(workers), &out_len)
 		if comp == nil {
 			return nil, false
 		}
 		// Copy into Odin-owned slice so callers can delete() uniformly.
 		out = make([]u8, int(out_len))
 		copy(out, ([^]u8)(comp)[:int(out_len)])
-		bkp_free(comp)
+		stach_free(comp)
 		return out, true
 	}
 
@@ -148,7 +148,7 @@ zstd_compress_tar_parallel :: proc(tar: []u8, workers: int) -> (out: []u8, ok: b
 	defer {
 		for &j in jobs {
 			if j.comp != nil {
-				bkp_free(j.comp)
+				stach_free(j.comp)
 				j.comp = nil
 			}
 		}
@@ -198,7 +198,7 @@ zstd_chunk_compress_task :: proc(t: thread.Task) {
 	}
 	out_len: c.size_t
 	// One frame per chunk; no nested MT (workers=1).
-	comp := bkp_zstd_compress(src_ptr, c.size_t(len(job.src)), 1, 1, &out_len)
+	comp := stach_zstd_compress(src_ptr, c.size_t(len(job.src)), 1, 1, &out_len)
 	if comp == nil {
 		job.err = true
 		return

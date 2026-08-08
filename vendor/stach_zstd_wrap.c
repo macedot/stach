@@ -1,5 +1,5 @@
 /*
- * Thin C wrapper around libzstd for bkp:
+ * Thin C wrapper around libzstd for stach:
  * - zstd compress (optional multi-thread for single-frame path)
  * - multi-frame scan helpers for parallel decompress
  * - free helper
@@ -10,9 +10,9 @@
 
 /* Compress with zstd. workers > 1 enables multi-threaded compress when
  * libzstd was built with ZSTD_MULTITHREAD (single-frame path).
- * Returns malloc'd buffer (free with bkp_free). NULL on failure.
+ * Returns malloc'd buffer (free with stach_free). NULL on failure.
  */
-unsigned char *bkp_zstd_compress(const unsigned char *src, size_t src_len,
+unsigned char *stach_zstd_compress(const unsigned char *src, size_t src_len,
                                  int level, int workers, size_t *out_len)
 {
 	ZSTD_CCtx *cctx;
@@ -69,7 +69,7 @@ unsigned char *bkp_zstd_compress(const unsigned char *src, size_t src_len,
 }
 
 /* Compressed size of the first frame at src, or 0 on error. */
-size_t bkp_zstd_frame_compressed_size(const unsigned char *src, size_t src_len)
+size_t stach_zstd_frame_compressed_size(const unsigned char *src, size_t src_len)
 {
 	size_t n;
 
@@ -84,7 +84,7 @@ size_t bkp_zstd_frame_compressed_size(const unsigned char *src, size_t src_len)
 /* Uncompressed size of the first frame at src.
  * Returns (size_t)-1 on error or unknown content size.
  */
-size_t bkp_zstd_frame_content_size(const unsigned char *src, size_t src_len)
+size_t stach_zstd_frame_content_size(const unsigned char *src, size_t src_len)
 {
 	unsigned long long sz;
 
@@ -99,7 +99,7 @@ size_t bkp_zstd_frame_content_size(const unsigned char *src, size_t src_len)
 /* Decompress one frame into caller-owned dst. Returns 0 on success, -1 on failure.
  * *out_len = bytes written.
  */
-int bkp_zstd_decompress_into(const unsigned char *src, size_t src_len,
+int stach_zstd_decompress_into(const unsigned char *src, size_t src_len,
                              unsigned char *dst, size_t dst_cap, size_t *out_len)
 {
 	size_t dsize;
@@ -120,7 +120,7 @@ int bkp_zstd_decompress_into(const unsigned char *src, size_t src_len,
 /* Decompress full multi-frame stream into a single malloc'd buffer (serial).
  * Parallel path uses frame scan + decompress_into instead.
  */
-unsigned char *bkp_zstd_decompress(const unsigned char *src, size_t src_len, size_t *out_len)
+unsigned char *stach_zstd_decompress(const unsigned char *src, size_t src_len, size_t *out_len)
 {
 	ZSTD_DCtx *dctx;
 	ZSTD_inBuffer input;
@@ -178,7 +178,7 @@ unsigned char *bkp_zstd_decompress(const unsigned char *src, size_t src_len, siz
 	return out;
 }
 
-void bkp_free(void *p)
+void stach_free(void *p)
 {
 	if (p)
 		free(p);
