@@ -1,28 +1,41 @@
 /*
  * Thin C wrapper around libzstd for stach:
- * - zstd compress (optional multi-thread for single-frame path)
- * - multi-frame scan helpers for parallel decompress
- * - free helper
+ * - zstd compress into a caller-owned buffer (bound + fill, like decompress_into)
+ * - multi-frame scan helpers
+ * - decompress one frame into a caller-owned buffer
+ *
+ * All buffers are caller-owned; nothing here allocates. The Goose side
+ * declares matching `extern fn`s in src/shim.goose. Byte buffers cross the
+ * boundary the way Goose slices do: one { data, len } struct by value.
  */
-#include "zstd/lib/zstd.h"
-#include <stdlib.h>
-#include <string.h>
+#include <zstd.h>
+#include <stddef.h>
+#include <stdint.h>
 
-/* Compress with zstd. workers > 1 enables multi-threaded compress when
- * libzstd was built with ZSTD_MULTITHREAD (single-frame path).
- * Returns malloc'd buffer (free with stach_free). NULL on failure.
+/* Matches a Goose u8[:] slice: { pointer, length }. */
+typedef struct { unsigned char *data; int64_t len; } stach_bytes;
+typedef struct { const unsigned char *data; int64_t len; } stach_cbytes;
+
+/* Worst-case compressed size for src_len bytes (headroom for the caller's buffer). */
+int64_t stach_zstd_compress_bound(int64_t src_len)
+{
+	return (int64_t)ZSTD_compressBound((size_t)(src_len < 0 ? 0 : src_len));
+}
+
+/* Compress src into caller-owned dst with zstd. workers > 1 enables
+ * multi-threaded compress when libzstd was built with ZSTD_MULTITHREAD
+ * (falls back to single-thread if not). Returns 0 on success, -1 on failure;
+ * *out_len = compressed bytes written to dst.
  */
-unsigned char *stach_zstd_compress(const unsigned char *src, size_t src_len,
-                                 int level, int workers, size_t *out_len)
+int32_t stach_zstd_compress_into(stach_cbytes src, int32_t level, int32_t workers,
+                                 stach_bytes dst, int64_t *out_len)
 {
 	ZSTD_CCtx *cctx;
-	size_t bound;
-	unsigned char *out;
 	size_t csize;
 	int w;
 
-	if (!out_len)
-		return NULL;
+	if (!out_len || !dst.data)
+		return -1;
 	*out_len = 0;
 
 	if (level < 1)
@@ -31,155 +44,75 @@ unsigned char *stach_zstd_compress(const unsigned char *src, size_t src_len,
 
 	cctx = ZSTD_createCCtx();
 	if (!cctx)
-		return NULL;
+		return -1;
 
 	if (ZSTD_isError(ZSTD_CCtx_setParameter(cctx, ZSTD_c_compressionLevel, level))) {
 		ZSTD_freeCCtx(cctx);
-		return NULL;
+		return -1;
 	}
 	if (w > 1) {
 		size_t r = ZSTD_CCtx_setParameter(cctx, ZSTD_c_nbWorkers, w);
-		if (ZSTD_isError(r)) {
+		if (ZSTD_isError(r))
 			(void)ZSTD_CCtx_setParameter(cctx, ZSTD_c_nbWorkers, 0);
-		}
 	}
 
-	bound = ZSTD_compressBound(src_len);
-	out = (unsigned char *)malloc(bound);
-	if (!out) {
-		ZSTD_freeCCtx(cctx);
-		return NULL;
-	}
-
-	csize = ZSTD_compress2(cctx, out, bound, src ? src : (const unsigned char *)"", src_len);
+	csize = ZSTD_compress2(cctx, dst.data, (size_t)dst.len,
+	                       src.data ? src.data : (const unsigned char *)"",
+	                       (size_t)(src.len < 0 ? 0 : src.len));
 	ZSTD_freeCCtx(cctx);
-	if (ZSTD_isError(csize)) {
-		free(out);
-		return NULL;
-	}
+	if (ZSTD_isError(csize))
+		return -1;
+	if (csize > (size_t)dst.len)
+		return -1;
 
-	if (csize < bound) {
-		unsigned char *shrunk = (unsigned char *)realloc(out, csize ? csize : 1);
-		if (shrunk)
-			out = shrunk;
-	}
-
-	*out_len = csize;
-	return out;
+	*out_len = (int64_t)csize;
+	return 0;
 }
 
 /* Compressed size of the first frame at src, or 0 on error. */
-size_t stach_zstd_frame_compressed_size(const unsigned char *src, size_t src_len)
+int64_t stach_zstd_frame_compressed_size(stach_cbytes src)
 {
 	size_t n;
 
-	if (!src || src_len == 0)
+	if (!src.data || src.len == 0)
 		return 0;
-	n = ZSTD_findFrameCompressedSize(src, src_len);
+	n = ZSTD_findFrameCompressedSize(src.data, (size_t)src.len);
 	if (ZSTD_isError(n))
 		return 0;
-	return n;
+	return (int64_t)n;
 }
 
 /* Uncompressed size of the first frame at src.
- * Returns (size_t)-1 on error or unknown content size.
+ * Returns -1 on error or unknown content size.
  */
-size_t stach_zstd_frame_content_size(const unsigned char *src, size_t src_len)
+int64_t stach_zstd_frame_content_size(stach_cbytes src)
 {
 	unsigned long long sz;
 
-	if (!src || src_len == 0)
-		return (size_t)-1;
-	sz = ZSTD_getFrameContentSize(src, src_len);
+	if (!src.data || src.len == 0)
+		return -1;
+	sz = ZSTD_getFrameContentSize(src.data, (size_t)src.len);
 	if (sz == ZSTD_CONTENTSIZE_ERROR || sz == ZSTD_CONTENTSIZE_UNKNOWN)
-		return (size_t)-1;
-	return (size_t)sz;
+		return -1;
+	return (int64_t)sz;
 }
 
 /* Decompress one frame into caller-owned dst. Returns 0 on success, -1 on failure.
  * *out_len = bytes written.
  */
-int stach_zstd_decompress_into(const unsigned char *src, size_t src_len,
-                             unsigned char *dst, size_t dst_cap, size_t *out_len)
+int32_t stach_zstd_decompress_into(stach_cbytes src, stach_bytes dst, int64_t *out_len)
 {
 	size_t dsize;
 
 	if (!out_len)
 		return -1;
 	*out_len = 0;
-	if (!src || !dst)
+	if (!src.data || !dst.data)
 		return -1;
 
-	dsize = ZSTD_decompress(dst, dst_cap, src, src_len);
+	dsize = ZSTD_decompress(dst.data, (size_t)dst.len, src.data, (size_t)src.len);
 	if (ZSTD_isError(dsize))
 		return -1;
-	*out_len = dsize;
+	*out_len = (int64_t)dsize;
 	return 0;
-}
-
-/* Decompress full multi-frame stream into a single malloc'd buffer (serial).
- * Parallel path uses frame scan + decompress_into instead.
- */
-unsigned char *stach_zstd_decompress(const unsigned char *src, size_t src_len, size_t *out_len)
-{
-	ZSTD_DCtx *dctx;
-	ZSTD_inBuffer input;
-	size_t cap;
-	size_t used = 0;
-	unsigned char *out;
-
-	if (!out_len || !src)
-		return NULL;
-	*out_len = 0;
-
-	dctx = ZSTD_createDCtx();
-	if (!dctx)
-		return NULL;
-
-	cap = src_len * 4;
-	if (cap < 64 * 1024)
-		cap = 64 * 1024;
-	out = (unsigned char *)malloc(cap);
-	if (!out) {
-		ZSTD_freeDCtx(dctx);
-		return NULL;
-	}
-
-	input.src = src;
-	input.size = src_len;
-	input.pos = 0;
-	while (input.pos < input.size) {
-		ZSTD_outBuffer output;
-		size_t ret;
-		if (used + 64 * 1024 > cap) {
-			size_t ncap = cap * 2;
-			unsigned char *n = (unsigned char *)realloc(out, ncap);
-			if (!n) {
-				free(out);
-				ZSTD_freeDCtx(dctx);
-				return NULL;
-			}
-			out = n;
-			cap = ncap;
-		}
-		output.dst = out + used;
-		output.size = cap - used;
-		output.pos = 0;
-		ret = ZSTD_decompressStream(dctx, &output, &input);
-		if (ZSTD_isError(ret)) {
-			free(out);
-			ZSTD_freeDCtx(dctx);
-			return NULL;
-		}
-		used += output.pos;
-	}
-	ZSTD_freeDCtx(dctx);
-	*out_len = used;
-	return out;
-}
-
-void stach_free(void *p)
-{
-	if (p)
-		free(p);
 }

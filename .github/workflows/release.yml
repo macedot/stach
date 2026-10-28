@@ -40,11 +40,23 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Odin
-        uses: laytan/setup-odin@v2
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          release: latest
+      - name: Install Goose (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          set -euo pipefail
+          # No Linux arm64 goose compiler exists yet; the download below
+          # fails with a clear error until one is published upstream.
+          case "${{ runner.arch }}" in
+            ARM64) asset=goose-v2026.3-linux-arm64.tar.gz ;;
+            *)     asset=goose-v2026.3-linux-x64.tar.gz ;;
+          esac
+          curl -fsSL -o /tmp/goose.tar.gz \
+            "https://github.com/aardappel/goose/releases/download/v2026.3/${asset}" \
+            || { echo "ERROR: no goose compiler asset ${asset} at v2026.3"; exit 1; }
+          mkdir -p "$HOME/goose"
+          tar -xzf /tmp/goose.tar.gz -C "$HOME/goose" --strip-components=1
+          echo "$HOME/goose" >> "$GITHUB_PATH"
+          goose version
 
       - name: Build (Unix)
         if: runner.os != 'Windows'
@@ -62,44 +74,37 @@ jobs:
           test "$code" -eq 2
           tar -czf "dist/${{ matrix.archive }}" -C dist "${{ matrix.asset }}"
 
-      - name: Enable MSVC environment
+      - name: Install Goose (Windows)
         if: runner.os == 'Windows'
-        uses: ilammy/msvc-dev-cmd@v1
+        shell: pwsh
+        run: |
+          $url = "https://github.com/aardappel/goose/releases/download/v2026.3/goose-v2026.3-windows-x64.zip"
+          Invoke-WebRequest -Uri $url -OutFile "$env:RUNNER_TEMP\goose.zip"
+          Expand-Archive -Path "$env:RUNNER_TEMP\goose.zip" -DestinationPath "$env:RUNNER_TEMP\goose"
+          $dir = Get-ChildItem "$env:RUNNER_TEMP\goose" | Select-Object -First 1
+          echo "$($dir.FullName)" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Build (Windows)
         if: runner.os == 'Windows'
         shell: cmd
         run: |
-          if not exist build mkdir build
           if not exist dist mkdir dist
 
-          rem Multi-frame parallelism is in Odin; disable libzstd internal MT to avoid
-          rem CRT _beginthreadex link issues when Odin links the static lib.
-          cmake -S vendor/zstd/build/cmake -B build/zstd-cmake -DZSTD_BUILD_PROGRAMS=OFF -DZSTD_BUILD_TESTS=OFF -DZSTD_BUILD_SHARED=OFF -DZSTD_BUILD_STATIC=ON -DZSTD_MULTITHREAD_SUPPORT=OFF -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded -DCMAKE_BUILD_TYPE=Release
-          if errorlevel 1 exit /b 1
-          cmake --build build/zstd-cmake --config Release --parallel
-          if errorlevel 1 exit /b 1
-
-          rem CMake MSVC output path
-          set ZSTD_LIB=build\zstd-cmake\lib\Release\zstd_static.lib
-          if not exist "%ZSTD_LIB%" set ZSTD_LIB=build\zstd-cmake\lib\zstd_static.lib
-          if not exist "%ZSTD_LIB%" (
-            echo ERROR: zstd_static.lib not found
-            dir /s /b build\zstd-cmake\*.lib
-            exit /b 1
-          )
-          echo Using %ZSTD_LIB%
-
-          cl /nologo /O2 /MT /Ivendor /Ivendor/zstd/lib /c vendor\stach_zstd_wrap.c /Fobuild\stach_zstd_wrap.obj
-          if errorlevel 1 exit /b 1
-          lib /nologo /OUT:build\stachzstd.lib build\stach_zstd_wrap.obj %ZSTD_LIB%
-          if errorlevel 1 exit /b 1
-
-          odin build src -out:stach.exe -o:speed -extra-linker-flags:"/NODEFAULTLIB:MSVCRT"
+          rem goose build finds MSVC itself and compiles the C from src\main.build.
+          goose build src\main.goose
           if errorlevel 1 exit /b 1
           copy /Y stach.exe dist\stach-windows-amd64.exe
           if errorlevel 1 exit /b 1
           powershell -NoProfile -Command "Compress-Archive -Path 'dist\\stach-windows-amd64.exe' -DestinationPath 'dist\\${{ matrix.archive }}' -Force"
+
+      - name: Smoke (Windows)
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: |
+          rem No args prints usage and must exit with code 2 exactly.
+          .\stach.exe >nul 2>&1
+          if NOT errorlevel 2 exit /b 1
+          if errorlevel 3 exit /b 1
 
       - name: Upload release asset
         uses: softprops/action-gh-release@v2

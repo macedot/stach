@@ -4,7 +4,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/github/license/macedot/stach?color=blue" alt="License" />
-  <img src="https://img.shields.io/badge/Odin-dev--2026-blueviolet" alt="Odin" />
+  <img src="https://img.shields.io/badge/Goose-v2026.3-blueviolet" alt="Goose" />
   <img src="https://img.shields.io/badge/platform-linux%20%7C%20macOS%20%7C%20windows-lightgrey" alt="Platforms" />
   <img src="https://img.shields.io/github/v/release/macedot/stach?display_name=tag" alt="Release" />
 </p>
@@ -13,7 +13,7 @@
 
 **stach** is a small, dependency-free CLI for fast local backups. Point it at files or directories and get timestamped copies: plain files are duplicated beside the original; directories become a single **`.tar.zst`** (ustar + zstd) that preserves **symlinks** and **hardlinks**. Unpack with `stach -x` or `tar` + `zstd` when those tools are available.
 
-Written in [Odin](https://odin-lang.org/). Compression uses embedded [zstd](https://github.com/facebook/zstd) (level 1, multi-threaded). No system `zstd` required at runtime.
+Written in [Goose](https://aardappel.github.io/goose/). Compression uses embedded [zstd](https://github.com/facebook/zstd) (level 1). No system `zstd` required at runtime.
 
 ## Features
 
@@ -22,8 +22,7 @@ Written in [Odin](https://odin-lang.org/). Compression uses embedded [zstd](http
 - **List mode** — no paths → pack `<dirname>.list` entries into one `<dirname>.<timestamp>.tar.zst` (`-f` for a custom list)
 - **Symlinks & hardlinks** — stored correctly in the tar stream
 - **Extract mode** — `stach -x` restores files, dirs, and links safely
-- **Parallel entities** — `-j` processes multiple top-level paths at once
-- **Parallel compress & extract** — `-c` multi-frame zstd (parallel compress + decompress) and parallel file writers
+- **Worker flags** — `-j`/`-c` size the worker pools (currently processed sequentially on the Goose port; archives stay identical)
 - **Folder pack progress** — live single-line progress while building archives
 - **Quiet mode** — `--quiet` suppresses non-error output
 - **Multi-arch releases** — Linux amd64/arm64, macOS Apple Silicon, Windows amd64
@@ -41,7 +40,7 @@ chmod +x stach-linux-amd64   # or the asset for your OS
 
 ### Build from source
 
-Requires [Odin](https://odin-lang.org/docs/install/) and a C compiler (`cc` / MSVC on Windows).
+Requires the [Goose](https://aardappel.github.io/goose/) compiler (v2026.3 or later) and a C compiler (`cc` / MSVC on Windows).
 
 ```bash
 git clone https://github.com/macedot/stach.git
@@ -68,8 +67,8 @@ stach [-c N] -x <archive.tar.zst> [dest_dir]
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `-j N` | CPU count | Max paths to process in parallel |
-| `-c N` | CPU count | multi-frame zstd workers (pack + extract decompress) and extract file writers |
+| `-j N` | CPU count | Max paths to process in parallel (sequential in the Goose port; accepted and validated) |
+| `-c N` | CPU count | multi-frame zstd workers (sequential in the Goose port; accepted and validated) |
 | `-f FILE` | `<cwd-basename>.list` when present | List file: one path per line; `#` comments; wildcards; missing entries warn and skip |
 | `--quiet` | off | Suppress all non-error output (progress + `src -> dst`) |
 
@@ -121,7 +120,9 @@ zstd -d -c project.20260714120000.tar.zst | tar -xf - -C restored/
 
 Hardlinks share an inode: the first copy stores data; later names reference it. Symlinks store the link target, not the pointed-to content. In list mode, hardlink dedup is shared across all list roots.
 
-Packing splits the tar into independent zstd frames (when `-c` > 1 and the tree is large enough) so both compress and decompress scale across cores. Extract inflates frames in parallel, creates directories, writes regular files in parallel, then applies symlinks/hardlinks. Path traversal (`..`, absolute names) is rejected before writing under the destination.
+Packing splits the tar into independent zstd frames (when `-c` > 1 and the tree is large enough). Extract scans frames, inflates them, creates directories, writes regular files, then applies symlinks/hardlinks. (The Goose port runs these phases sequentially; the on-disk archive format is unchanged from the Odin version.) Path traversal (`..`, absolute names) is rejected before writing under the destination.
+
+Note: extraction requires frame content sizes, so it accepts stach archives and files compressed by `zstd FILE` — but not streams piped through `zstd` (whose frame headers carry no size; the same limitation as the Odin version).
 
 ## Test
 
@@ -154,10 +155,10 @@ Publishing a GitHub Release runs [`.github/workflows/release.yml`](.github/workf
 
 | Path | Role |
 |------|------|
-| `src/` | Odin sources (CLI, list mode, tar write/read, copy) |
+| `src/` | Goose sources (CLI, list mode, tar write/read, copy) + `main.build` sidecar |
 | `vendor/zstd/` | Embedded [zstd](https://github.com/facebook/zstd) library |
-| `vendor/stach_zstd_wrap.c` | Thin C API used from Odin |
-| `build/` | Local objects / static lib (not tracked) |
+| `vendor/stach_zstd_wrap.c` | Thin C API used from Goose (`extern fn`) |
+| `vendor/stach_shim.c` | Filesystem helpers the Goose stdlib lacks (lstat, links, chmod, cwd) |
 | `.github/workflows/` | Multi-arch release builds |
 
 ## License

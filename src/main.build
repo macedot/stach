@@ -1,0 +1,42 @@
+// stach sidecar: the program's own C. Compiles the vendored libzstd (no
+// assembler, no dictionary builder, no multi-threading), the zstd wrapper
+// and the filesystem shim; the Goose side binds them via `extern fn`.
+// Paths are relative to this file.
+c_include = ["../vendor/zstd/lib", "../vendor"];
+c_defines = ["ZSTD_DISABLE_ASM=1"];
+output = "../stach";
+
+c_sources = [
+	// zstd: common
+	"../vendor/zstd/lib/common/debug.c",
+	"../vendor/zstd/lib/common/entropy_common.c",
+	"../vendor/zstd/lib/common/error_private.c",
+	"../vendor/zstd/lib/common/fse_decompress.c",
+	"../vendor/zstd/lib/common/pool.c",
+	"../vendor/zstd/lib/common/threading.c",
+	"../vendor/zstd/lib/common/xxhash.c",
+	"../vendor/zstd/lib/common/zstd_common.c",
+	// zstd: compress
+	"../vendor/zstd/lib/compress/fse_compress.c",
+	"../vendor/zstd/lib/compress/hist.c",
+	"../vendor/zstd/lib/compress/huf_compress.c",
+	"../vendor/zstd/lib/compress/zstd_compress.c",
+	"../vendor/zstd/lib/compress/zstd_compress_literals.c",
+	"../vendor/zstd/lib/compress/zstd_compress_sequences.c",
+	"../vendor/zstd/lib/compress/zstd_compress_superblock.c",
+	"../vendor/zstd/lib/compress/zstd_double_fast.c",
+	"../vendor/zstd/lib/compress/zstd_fast.c",
+	"../vendor/zstd/lib/compress/zstd_lazy.c",
+	"../vendor/zstd/lib/compress/zstd_ldm.c",
+	"../vendor/zstd/lib/compress/zstd_opt.c",
+	"../vendor/zstd/lib/compress/zstd_preSplit.c",
+	"../vendor/zstd/lib/compress/zstdmt_compress.c",
+	// zstd: decompress
+	"../vendor/zstd/lib/decompress/huf_decompress.c",
+	"../vendor/zstd/lib/decompress/zstd_ddict.c",
+	"../vendor/zstd/lib/decompress/zstd_decompress.c",
+	"../vendor/zstd/lib/decompress/zstd_decompress_block.c",
+	// stach's own C
+	"../vendor/stach_zstd_wrap.c",
+	"../vendor/stach_shim.c",
+];

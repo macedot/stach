@@ -1,49 +1,21 @@
-# stach — standalone Odin backup tool
-CC      ?= cc
-CFLAGS  ?= -O2 -fPIC -Ivendor
-ODIN    ?= odin
-BUILD   := build
-ZSTD_LIB_DIR := vendor/zstd/lib
-ZSTD_A  := $(ZSTD_LIB_DIR)/libzstd.a
-LIB     := $(BUILD)/libstachzstd.a
-OUT     ?= stach
+# stach — standalone backup tool, written in Goose
+GOOSE ?= goose
+OUT   ?= stach
 
-# Linux needs pthread for zstd multi-threaded compress; macOS has it in libSystem.
-UNAME_S := $(shell uname -s 2>/dev/null || echo unknown)
-ifeq ($(UNAME_S),Linux)
-  EXTRA_LINKER := -extra-linker-flags:"-lpthread"
-else
-  EXTRA_LINKER :=
-endif
-
-.PHONY: all clean test zstd
+.PHONY: all check clean test
 
 all: $(OUT)
 
-$(BUILD):
-	mkdir -p $(BUILD)
+# goose compiles the program plus the vendored C (libzstd, wrapper, shim)
+# declared in src/main.build; the sidecar sets output to ../stach.
+$(OUT): src/*.goose src/main.build vendor/stach_zstd_wrap.c vendor/stach_shim.c vendor/zstd/lib
+	$(GOOSE) build src/main.goose
 
-# Multi-threaded static libzstd (nbWorkers support).
-$(ZSTD_A):
-	$(MAKE) -C $(ZSTD_LIB_DIR) libzstd.a-mt
-
-$(BUILD)/stach_zstd_wrap.o: vendor/stach_zstd_wrap.c vendor/zstd/lib/zstd.h | $(BUILD)
-	$(CC) $(CFLAGS) -c -o $@ vendor/stach_zstd_wrap.c
-
-# Combine wrap + libzstd into one archive for Odin foreign import.
-$(LIB): $(BUILD)/stach_zstd_wrap.o $(ZSTD_A) | $(BUILD)
-	rm -rf $(BUILD)/zstd_objs
-	mkdir -p $(BUILD)/zstd_objs
-	cd $(BUILD)/zstd_objs && ar x ../../$(ZSTD_A)
-	ar rcs $@ $(BUILD)/zstd_objs/*.o $(BUILD)/stach_zstd_wrap.o
-	rm -rf $(BUILD)/zstd_objs
-
-$(OUT): $(LIB) src/*.odin
-	$(ODIN) build src -out:$(OUT) -o:speed $(EXTRA_LINKER)
+check:
+	$(GOOSE) check src/main.goose
 
 clean:
-	rm -rf $(BUILD) stach stach.exe
-	$(MAKE) -C $(ZSTD_LIB_DIR) clean >/dev/null 2>&1 || true
+	rm -f $(OUT) stach.exe src/stach
 
 # Functional smoke: file copy, .tar.zst with symlink+hardlink, extract
 test: $(OUT)
