@@ -8,10 +8,16 @@ import "core:strings"
 import "core:thread"
 import "core:time"
 
-// Minimum uncompressed tar bytes per zstd frame when multi-frame packing.
-ZSTD_FRAME_CHUNK_MIN :: 1 * 1024 * 1024
+// Tar chunks smaller than this become a single gzip member.
+GZIP_MEMBER_CHUNK_MIN :: 1 * 1024 * 1024
+// Members stay at or under this so 32-bit stream windows hold; bigger trees
+// simply get more members (gzip decodes concatenated members transparently).
+GZIP_MEMBER_CHUNK_MAX :: 1 * 1024 * 1024 * 1024
 
-Zstd_Chunk_Job :: struct {
+// gzip default level, matching `tar czf`.
+GZIP_LEVEL :: 6
+
+Gzip_Chunk_Job :: struct {
 	src:      []u8,
 	comp:     [^]u8,
 	comp_len: int,
@@ -48,8 +54,8 @@ Tar_Pack_Progress :: struct {
 
 PROGRESS_ENTRY_STEP :: 32
 
-// tar_directory writes src tree to dst as zstd-compressed ustar (.tar.zst).
-// compress_workers: multi-frame parallel compress (independent zstd frames).
+// tar_directory writes src tree to dst as gzip-compressed ustar (.tgz).
+// compress_workers: multi-member parallel compress (independent gzip members).
 tar_directory :: proc(src_path, dst_path: string, compress_workers: int) -> bool {
 	src := strip_trailing_slashes(src_path)
 	base_name := filepath.base(src)
@@ -67,8 +73,9 @@ tar_directory :: proc(src_path, dst_path: string, compress_workers: int) -> bool
 	return pack_tar_entries(base_name, entries, dst_path, compress_workers)
 }
 
-// pack_tar_entries renders progress, builds the ustar buffer, compresses it with
-// multi-frame zstd, and writes dst_path. Shared by tar_directory and list mode.
+// pack_tar_entries renders progress, builds the ustar buffer, compresses it
+// into independent gzip members, and writes dst_path. Shared by tar_directory
+// and list mode.
 pack_tar_entries :: proc(
 	label: string,
 	entries: [dynamic]Tar_Entry,
@@ -101,14 +108,14 @@ pack_tar_entries :: proc(
 	append_zeros(&tar_buf, 1024)
 
 	print_progress_update(
-		progress_phase_line(label, fmt.tprintf("Compressing zstd (%d workers)", workers)),
+		progress_phase_line(label, fmt.tprintf("Compressing gzip (%d workers)", workers)),
 		false,
 	)
 
-	comp, cok := zstd_compress_tar_parallel(tar_buf[:], workers)
+	comp, cok := gzip_compress_tar_parallel(tar_buf[:], workers)
 	if !cok {
 		finish_pack_progress(&progress, false)
-		eprintfln("Error: zstd compress failed for %s", label)
+		eprintfln("Error: gzip compress failed for %s", label)
 		return false
 	}
 	defer delete(comp)
@@ -124,20 +131,22 @@ pack_tar_entries :: proc(
 	return true
 }
 
-// zstd_compress_tar_parallel emits one or more independent zstd frames so extract
-// can decompress frames in parallel. Level 1 for fast backups.
-zstd_compress_tar_parallel :: proc(tar: []u8, workers: int) -> (out: []u8, ok: bool) {
+// gzip_compress_tar_parallel emits one or more independent gzip members so
+// plain `tar -xzf` / `gzip -d` handle the result, and parallel deflate scales
+// across workers. Level GZIP_LEVEL (gzip default).
+gzip_compress_tar_parallel :: proc(tar: []u8, workers: int) -> (out: []u8, ok: bool) {
 	workers := max(1, workers)
 	tar_len := len(tar)
 
-	// Single frame when small or single worker.
-	if workers == 1 || tar_len <= ZSTD_FRAME_CHUNK_MIN {
+	// Single member when small; bigger trees split into independent members,
+	// each deflated on its own worker (no nested threading).
+	if tar_len <= GZIP_MEMBER_CHUNK_MIN {
 		src_ptr: [^]u8 = nil
 		if tar_len > 0 {
 			src_ptr = raw_data(tar)
 		}
 		out_len: c.size_t
-		comp := stach_zstd_compress(src_ptr, c.size_t(tar_len), 1, c.int(workers), &out_len)
+		comp := stach_gzip_compress(src_ptr, c.size_t(tar_len), GZIP_LEVEL, &out_len)
 		if comp == nil {
 			return nil, false
 		}
@@ -148,14 +157,16 @@ zstd_compress_tar_parallel :: proc(tar: []u8, workers: int) -> (out: []u8, ok: b
 		return out, true
 	}
 
-	// Target ~workers*4 chunks, each at least CHUNK_MIN (except last).
-	chunk_size := max(ZSTD_FRAME_CHUNK_MIN, (tar_len + workers * 4 - 1) / (workers * 4))
+	// Target ~workers*4 members, each within [CHUNK_MIN, CHUNK_MAX].
+	chunk_size := (tar_len + workers * 4 - 1) / (workers * 4)
+	chunk_size = min(chunk_size, GZIP_MEMBER_CHUNK_MAX)
+	chunk_size = max(chunk_size, GZIP_MEMBER_CHUNK_MIN)
 	n_chunks := (tar_len + chunk_size - 1) / chunk_size
 	if n_chunks < 1 {
 		n_chunks = 1
 	}
 
-	jobs := make([]Zstd_Chunk_Job, n_chunks)
+	jobs := make([]Gzip_Chunk_Job, n_chunks)
 	defer {
 		for &j in jobs {
 			if j.comp != nil {
@@ -179,7 +190,7 @@ zstd_compress_tar_parallel :: proc(tar: []u8, workers: int) -> (out: []u8, ok: b
 	defer thread.pool_destroy(&pool)
 
 	for i in 0 ..< n_chunks {
-		thread.pool_add_task(&pool, context.allocator, zstd_chunk_compress_task, &jobs[i], i)
+		thread.pool_add_task(&pool, context.allocator, gzip_chunk_compress_task, &jobs[i], i)
 	}
 	thread.pool_start(&pool)
 	thread.pool_finish(&pool)
@@ -201,15 +212,15 @@ zstd_compress_tar_parallel :: proc(tar: []u8, workers: int) -> (out: []u8, ok: b
 	return out, true
 }
 
-zstd_chunk_compress_task :: proc(t: thread.Task) {
-	job := cast(^Zstd_Chunk_Job)t.data
+gzip_chunk_compress_task :: proc(t: thread.Task) {
+	job := cast(^Gzip_Chunk_Job)t.data
 	src_ptr: [^]u8 = nil
 	if len(job.src) > 0 {
 		src_ptr = raw_data(job.src)
 	}
 	out_len: c.size_t
-	// One frame per chunk; no nested MT (workers=1).
-	comp := stach_zstd_compress(src_ptr, c.size_t(len(job.src)), 1, 1, &out_len)
+	// One gzip member per chunk.
+	comp := stach_gzip_compress(src_ptr, c.size_t(len(job.src)), GZIP_LEVEL, &out_len)
 	if comp == nil {
 		job.err = true
 		return

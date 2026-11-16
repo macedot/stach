@@ -26,10 +26,6 @@ src/**/*.o
 src/**/*.obj
 vendor/**/*.o
 vendor/**/*.obj
-vendor/zstd/lib/obj/
-vendor/zstd/lib/libzstd.a
-vendor/zstd/lib/libzstd.so*
-vendor/zstd/lib/libzstd.dylib*
 *.o
 *.obj
 *.lib

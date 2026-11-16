@@ -22,24 +22,9 @@ Extract_Op :: struct {
 	payload:     []u8, // view into tar buffer for files
 }
 
-Zstd_Frame :: struct {
-	comp_off: int,
-	comp_len: int,
-	out_off:  int,
-	out_len:  int,
-}
-
-Zstd_Frame_Job :: struct {
-	zst:       []u8,
-	tar:       []u8,
-	frame:     Zstd_Frame,
-	fail_flag: ^bool,
-	fail_mu:   ^sync.Mutex,
-}
-
-// extract_tar_zst unpacks a zstd-compressed tar into dest_dir.
-// workers: parallel frame decompress + parallel regular-file writes.
-extract_tar_zst :: proc(archive, dest_dir: string, workers: int) -> bool {
+// extract_tar_gz unpacks a gzip-compressed tar (.tgz) into dest_dir.
+// workers: parallel regular-file writes (gzip inflate is sequential).
+extract_tar_gz :: proc(archive, dest_dir: string, workers: int) -> bool {
 	if !os.exists(archive) {
 		eprintfln("Error: Not found: %s", archive)
 		return false
@@ -55,16 +40,16 @@ extract_tar_zst :: proc(archive, dest_dir: string, workers: int) -> bool {
 		return false
 	}
 
-	zst_data, rerr := os.read_entire_file(archive, context.allocator)
+	gz_data, rerr := os.read_entire_file(archive, context.allocator)
 	if rerr != nil {
 		eprintfln("Error: read %s: %v", archive, rerr)
 		return false
 	}
-	defer delete(zst_data)
+	defer delete(gz_data)
 
-	tar_data, dok := zstd_decompress_parallel(zst_data, max(1, workers))
+	tar_data, dok := gzip_decompress_stream(gz_data)
 	if !dok {
-		eprintfln("Error: zstd decompress failed for %s", archive)
+		eprintfln("Error: gzip decompress failed for %s", archive)
 		return false
 	}
 	defer delete(tar_data)
@@ -72,134 +57,23 @@ extract_tar_zst :: proc(archive, dest_dir: string, workers: int) -> bool {
 	return extract_tar_bytes(tar_data, dest, max(1, workers))
 }
 
-// zstd_decompress_parallel scans independent frames and inflates them with a worker pool.
-// Single-frame archives (and serial multi-frame) both work.
-zstd_decompress_parallel :: proc(zst: []u8, workers: int) -> (tar: []u8, ok: bool) {
-	frames, fok := zstd_scan_frames(zst)
-	if !fok {
-		return nil, false
+// gzip_decompress_stream inflates a multi-member gzip stream into one
+// Odin-owned buffer (serial). The C wrapper verifies every member's
+// CRC32 + ISIZE trailer and rejects truncation / trailing garbage.
+gzip_decompress_stream :: proc(gz: []u8) -> (tar: []u8, ok: bool) {
+	src_ptr: [^]u8 = nil
+	if len(gz) > 0 {
+		src_ptr = raw_data(gz)
 	}
-	defer delete(frames)
-
-	if len(frames) == 0 {
-		return make([]u8, 0), true
-	}
-
-	total_out := 0
-	for f in frames {
-		total_out += f.out_len
-	}
-	tar = make([]u8, total_out)
-
-	if len(frames) == 1 || workers <= 1 {
-		for f in frames {
-			src := zst[f.comp_off:f.comp_off + f.comp_len]
-			dst := tar[f.out_off:f.out_off + f.out_len]
-			out_len: c.size_t
-			if stach_zstd_decompress_into(
-				   raw_data(src),
-				   c.size_t(len(src)),
-				   raw_data(dst),
-				   c.size_t(len(dst)),
-				   &out_len,
-			   ) !=
-			   0 {
-				delete(tar)
-				return nil, false
-			}
-			if int(out_len) != f.out_len {
-				delete(tar)
-				return nil, false
-			}
-		}
-		return tar, true
-	}
-
-	fail_flag: bool
-	fail_mu: sync.Mutex
-	jobs := make([]Zstd_Frame_Job, len(frames))
-	defer delete(jobs)
-
-	n_pool := min(max(1, workers), len(frames))
-	pool: thread.Pool
-	thread.pool_init(&pool, context.allocator, n_pool)
-	defer thread.pool_destroy(&pool)
-
-	for i in 0 ..< len(frames) {
-		jobs[i] = Zstd_Frame_Job {
-			zst       = zst,
-			tar       = tar,
-			frame     = frames[i],
-			fail_flag = &fail_flag,
-			fail_mu   = &fail_mu,
-		}
-		thread.pool_add_task(&pool, context.allocator, zstd_frame_decompress_task, &jobs[i], i)
-	}
-	thread.pool_start(&pool)
-	thread.pool_finish(&pool)
-
-	if fail_flag {
-		delete(tar)
-		return nil, false
-	}
-	return tar, true
-}
-
-zstd_scan_frames :: proc(zst: []u8) -> (frames: [dynamic]Zstd_Frame, ok: bool) {
-	frames = make([dynamic]Zstd_Frame)
-	off := 0
-	out_off := 0
-	UNKNOWN :: ~c.size_t(0)
-	for off < len(zst) {
-		remain := zst[off:]
-		csize_c := stach_zstd_frame_compressed_size(raw_data(remain), c.size_t(len(remain)))
-		csize := int(csize_c)
-		if csize_c == 0 || csize <= 0 || csize > len(remain) {
-			delete(frames)
-			return nil, false
-		}
-		usize_c := stach_zstd_frame_content_size(raw_data(remain), c.size_t(csize))
-		if usize_c == UNKNOWN {
-			delete(frames)
-			return nil, false
-		}
-		usize := int(usize_c)
-		append(
-			&frames,
-			Zstd_Frame{comp_off = off, comp_len = csize, out_off = out_off, out_len = usize},
-		)
-		off += csize
-		out_off += usize
-	}
-	return frames, true
-}
-
-zstd_frame_decompress_task :: proc(t: thread.Task) {
-	job := cast(^Zstd_Frame_Job)t.data
-	sync.mutex_lock(job.fail_mu)
-	already := job.fail_flag^
-	sync.mutex_unlock(job.fail_mu)
-	if already {
-		return
-	}
-
-	f := job.frame
-	src := job.zst[f.comp_off:f.comp_off + f.comp_len]
-	dst := job.tar[f.out_off:f.out_off + f.out_len]
 	out_len: c.size_t
-	if stach_zstd_decompress_into(
-		   raw_data(src),
-		   c.size_t(len(src)),
-		   raw_data(dst),
-		   c.size_t(len(dst)),
-		   &out_len,
-	   ) !=
-	   0 ||
-	   int(out_len) != f.out_len {
-		sync.mutex_lock(job.fail_mu)
-		job.fail_flag^ = true
-		sync.mutex_unlock(job.fail_mu)
+	comp := stach_gzip_decompress(src_ptr, c.size_t(len(gz)), &out_len)
+	if comp == nil {
+		return nil, false
 	}
+	tar = make([]u8, int(out_len))
+	copy(tar, ([^]u8)(comp)[:int(out_len)])
+	stach_free(comp)
+	return tar, true
 }
 
 extract_tar_bytes :: proc(data: []u8, dest_dir: string, workers: int) -> bool {

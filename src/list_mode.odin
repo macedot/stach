@@ -6,7 +6,7 @@ import "core:path/filepath"
 import "core:strings"
 
 // List mode: pack every entry of a list file into a single timestamped
-// .tar.zst. List file format: one path per line, '#' comments and blank lines
+// .tgz. List file format: one path per line, '#' comments and blank lines
 // ignored, '*'/'?'/'[' wildcards expanded, missing entries warned and skipped.
 
 // parse_list_file returns the cleaned entry lines (each cloned).
@@ -102,7 +102,7 @@ append_unique_resolved :: proc(resolved: ^[dynamic]string, seen: ^map[string]boo
 }
 
 // run_list_mode packs all entries of list_path into one
-// <cwd basename>.<timestamp>.tar.zst in the current directory.
+// <cwd basename>.<timestamp>.tgz in the current directory.
 run_list_mode :: proc(list_path: string, compress_workers: int) -> bool {
 	lines := parse_list_file(list_path)
 	defer {

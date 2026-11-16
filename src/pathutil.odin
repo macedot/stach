@@ -101,7 +101,7 @@ dest_for_file :: proc(src, ts: string) -> string {
 }
 
 dest_for_dir :: proc(src, ts: string) -> string {
-	return fmt.tprintf("%s.%s.tar.zst", src, ts)
+	return fmt.tprintf("%s.%s.tgz", src, ts)
 }
 
 // archive_entry_name builds tar member path with forward slashes.

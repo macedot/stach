@@ -46,22 +46,22 @@ print_usage :: proc() {
 	fmt.eprintf(
 		`Usage: %s [--quiet] [-j N] [-c N] <file|directory|pattern> ...
        %s [--quiet] [-c N] [-f list_file]
-       %s [-c N] -x <archive.tar.zst> [dest_dir]
+       %s [-c N] -x <archive.tgz> [dest_dir]
 
   Backup (default):
     Files  → copy to <path>.<timestamp>
-    Dirs   → <path>.<timestamp>.tar.zst  (ustar + zstd level 1; symlinks/hardlinks)
+    Dirs   → <path>.<timestamp>.tgz  (ustar + gzip level 6; symlinks/hardlinks)
 
   List mode:
-    No paths → pack entries of <dirname>.list into one <dirname>.<timestamp>.tar.zst
+    No paths → pack entries of <dirname>.list into one <dirname>.<timestamp>.tgz
     -f FILE  Use a custom list file (one path per line; '#' comments and
              wildcards supported; missing entries warn and are skipped)
 
   Extract:
-    -x     Unpack .tar.zst into dest_dir (default: .)
+    -x     Unpack .tgz / .tar.gz into dest_dir (default: .)
 
   -j N   Max entities to process in parallel (default: CPU count)
-  -c N   multi-frame zstd workers + extract file writers (default: CPU count)
+  -c N   gzip member workers (pack) + extract file writers (default: CPU count)
   --quiet   Suppress all non-error output
 
   Prints only: src -> dst and live pack progress
@@ -262,7 +262,7 @@ main :: proc() {
 			os.exit(2)
 		}
 		if len(patterns) < 1 || len(patterns) > 2 {
-			eprintfln("Error: -x requires <archive.tar.zst> [dest_dir]")
+			eprintfln("Error: -x requires <archive.tgz> [dest_dir]")
 			print_usage()
 			os.exit(2)
 		}
@@ -270,7 +270,7 @@ main :: proc() {
 		if len(patterns) == 2 {
 			extract_dest = patterns[1]
 		}
-		if extract_tar_zst(extract_archive, extract_dest, cores_n) {
+		if extract_tar_gz(extract_archive, extract_dest, cores_n) {
 			print_src_dst(extract_archive, extract_dest)
 			os.exit(0)
 		}

@@ -119,7 +119,7 @@ pack_store()    { tar -cf "$ARCH" -C "$TMP" corpus; }
 extract_store() { rm -rf "$XOUT"; mkdir -p "$XOUT"; tar -xf "$ARCH" -C "$XOUT"; }
 
 pack_stach() {
-	rm -f "$TMP"/corpus.*.tar.zst
+	rm -f "$TMP"/corpus.*.tgz
 	(cd "$TMP" && "$STACH" --quiet -c "$WORKERS" corpus)
 }
 extract_stach() {
@@ -136,7 +136,7 @@ extract_zstd() {
 }
 
 # lz4 CLI has no multithreading: split the tar into WORKERS*4 chunks, compress
-# in parallel, concatenate frames (same model as stach's multi-frame zstd).
+# in parallel, concatenate frames (same model as stach's multi-member gzip).
 pack_lz4() {
 	local cdir="$TMP/.lz4c" ttar="$TMP/.lz4.tar" size chunk
 	rm -rf "$cdir"
@@ -198,13 +198,13 @@ echo "candidate,parallel,pack_ms,extract_ms,size_bytes" > "$CSV"
 
 run_candidate "store (tar only)" "none" pack_store extract_store "$TMP/arch_store.tar" "cat"
 
-ARCH_STACH="$TMP/stach_archive.tar.zst"
+ARCH_STACH="$TMP/stach_archive.tgz"
 pack_stach
-mv "$TMP"/corpus.*.tar.zst "$ARCH_STACH"
-# stach archives must also be extractable via system zstd | tar
-echo "== stach zstd-1 multi-frame (embedded)"
-echo "   gate: zstd -dc | tar -x"
-gate_pipe "zstd -q -dc" "$ARCH_STACH"
+mv "$TMP"/corpus.*.tgz "$ARCH_STACH"
+# stach archives must also be extractable via system gzip | tar
+echo "== stach gzip-6 multi-member (embedded)"
+echo "   gate: gzip -dc | tar -x"
+gate_pipe "gzip -q -dc" "$ARCH_STACH"
 echo "   gate: stach -x"
 G="$TMP/.gate"
 rm -rf "$G"; mkdir -p "$G"
@@ -215,7 +215,7 @@ STACH_PACK_MS=$(time_best pack_stach)
 STACH_SIZE=$(stat -f %z "$ARCH_STACH")
 ARCH="$ARCH_STACH"
 STACH_EXTRACT_MS=$(time_best extract_stach)
-printf '%s,%s,%s,%s,%s\n' "stach zstd-1 (embedded)" "multi-frame -c $WORKERS" \
+printf '%s,%s,%s,%s,%s\n' "stach gzip-6 (embedded)" "multi-member -c $WORKERS" \
 	"$STACH_PACK_MS" "$STACH_EXTRACT_MS" "$STACH_SIZE" >> "$CSV"
 
 ZSTD_LVL="--fast=1" run_candidate "zstd --fast=1" "-T $WORKERS" pack_zstd extract_zstd "$TMP/arch_zfast1.tar.zst" "zstd -q -dc"
@@ -263,8 +263,8 @@ best_ratio=$(tail -n +2 "$CSV" | grep -v '^store' | sort -t, -k5 -n | head -1 | 
 	echo
 	echo "## Notes"
 	echo
-	echo "- \`stach zstd-1 (embedded)\` includes in-memory tar building; pipeline candidates stream \`tar -cf - | compressor\`."
-	echo "- lz4 CLI has no multithreading; it is chunked into $((WORKERS * 4)) parts compressed with \`xargs -P $WORKERS\` and concatenated (same model as stach multi-frame zstd). \`lz4 --fast=3\` is shown instead of \`--fast=1\`, which is identical to the default."
+	echo "- \`stach gzip-6 (embedded)\` includes in-memory tar building; pipeline candidates stream \`tar -cf - | compressor\`. stach emits independent gzip members (concatenated, RFC 1952)."
+	echo "- lz4 CLI has no multithreading; it is chunked into $((WORKERS * 4)) parts compressed with \`xargs -P $WORKERS\` and concatenated (same model as stach multi-member gzip). \`lz4 --fast=3\` is shown instead of \`--fast=1\`, which is identical to the default."
 	echo "- gzip and brotli ran single-threaded (no pigz installed)."
 	echo "- Ratio is archive size / uncompressed tar size; lower is better."
 } > "$REPORT"

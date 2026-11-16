@@ -73,26 +73,18 @@ jobs:
           if not exist build mkdir build
           if not exist dist mkdir dist
 
-          rem Multi-frame parallelism is in Odin; disable libzstd internal MT to avoid
-          rem CRT _beginthreadex link issues when Odin links the static lib.
-          cmake -S vendor/zstd/build/cmake -B build/zstd-cmake -DZSTD_BUILD_PROGRAMS=OFF -DZSTD_BUILD_TESTS=OFF -DZSTD_BUILD_SHARED=OFF -DZSTD_BUILD_STATIC=ON -DZSTD_MULTITHREAD_SUPPORT=OFF -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded -DCMAKE_BUILD_TYPE=Release
+          rem miniz (gzip) + thin wrapper as one static lib for Odin foreign import.
+          cl /nologo /O2 /MT /Ivendor /c vendor\miniz\miniz.c /Fobuild\miniz.obj
           if errorlevel 1 exit /b 1
-          cmake --build build/zstd-cmake --config Release --parallel
+          cl /nologo /O2 /MT /Ivendor /c vendor\miniz\miniz_tinfl.c /Fobuild\miniz_tinfl.obj
           if errorlevel 1 exit /b 1
-
-          rem CMake MSVC output path
-          set ZSTD_LIB=build\zstd-cmake\lib\Release\zstd_static.lib
-          if not exist "%ZSTD_LIB%" set ZSTD_LIB=build\zstd-cmake\lib\zstd_static.lib
-          if not exist "%ZSTD_LIB%" (
-            echo ERROR: zstd_static.lib not found
-            dir /s /b build\zstd-cmake\*.lib
-            exit /b 1
-          )
-          echo Using %ZSTD_LIB%
-
-          cl /nologo /O2 /MT /Ivendor /Ivendor/zstd/lib /c vendor\stach_zstd_wrap.c /Fobuild\stach_zstd_wrap.obj
+          cl /nologo /O2 /MT /Ivendor /c vendor\miniz\miniz_tdef.c /Fobuild\miniz_tdef.obj
           if errorlevel 1 exit /b 1
-          lib /nologo /OUT:build\stachzstd.lib build\stach_zstd_wrap.obj %ZSTD_LIB%
+          cl /nologo /O2 /MT /Ivendor /c vendor\miniz\miniz_zip.c /Fobuild\miniz_zip.obj
+          if errorlevel 1 exit /b 1
+          cl /nologo /O2 /MT /Ivendor /c vendor\stach_gzip_wrap.c /Fobuild\stach_gzip_wrap.obj
+          if errorlevel 1 exit /b 1
+          lib /nologo /OUT:build\stachgz.lib build\miniz.obj build\miniz_tinfl.obj build\miniz_tdef.obj build\miniz_zip.obj build\stach_gzip_wrap.obj
           if errorlevel 1 exit /b 1
 
           odin build src -out:stach.exe -o:speed -extra-linker-flags:"/NODEFAULTLIB:MSVCRT"
